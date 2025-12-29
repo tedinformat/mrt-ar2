@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>捷運窗景互動相框</title>
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; background-color: black; }
+
+        /* 1. 全螢幕相機容器 */
+        #camera-container {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 1;
+        }
+        /* 讓影片填滿螢幕 (像 IG 限動那樣) */
+        #camera-feed {
+            width: 100%; height: 100%;
+            object-fit: cover; 
+            transform: scaleX(1); /* 後鏡頭不用鏡像翻轉 */
+        }
+
+        /* 2. Barcode 圖層 (浮在相機上面) */
+        #overlay-layer {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 2;
+            pointer-events: none; /* 讓點擊穿透，不會擋住操作 */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* 您的 Barcode 圖片設定 */
+        #barcode-img {
+            /* 這裡設定圖片在螢幕上的大小 */
+            width: 85%;  /* 佔螢幕寬度 85% */
+            max-width: 600px; /* 最大不超過 600px */
+            height: auto;
+            opacity: 0.95; /* 稍微透明一點點更有質感 */
+            /* 如果想要圖片不在正中間，可以用 margin-top 來調整 */
+        }
+
+        /* 3. 拍照按鈕區域 */
+        #ui-layer {
+            position: fixed; bottom: 40px; left: 0; width: 100%;
+            z-index: 3;
+            display: flex; justify-content: center;
+        }
+
+        .shutter-btn {
+            width: 70px; height: 70px;
+            background-color: rgba(255, 255, 255, 0.8);
+            border: 4px solid rgba(200, 200, 200, 0.6);
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            transition: transform 0.1s;
+        }
+        .shutter-btn:active { transform: scale(0.9); background-color: white; }
+
+        /* 錯誤訊息 (沒開相機權限時顯示) */
+        #error-msg {
+            display: none; position: fixed; top: 50%; width: 100%; text-align: center;
+            color: white; z-index: 99; font-family: sans-serif;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="error-msg">請允許相機權限以進行體驗</div>
+
+    <div id="camera-container">
+        <video id="camera-feed" autoplay playsinline muted></video>
+    </div>
+
+    <div id="overlay-layer">
+        <img id="barcode-img" src="./barcode.png" alt="Barcode Overlay">
+    </div>
+
+    <div id="ui-layer">
+        <div class="shutter-btn" id="shutterBtn"></div>
+    </div>
+
+    <script>
+        // 取得元素
+        const video = document.getElementById('camera-feed');
+        const shutterBtn = document.getElementById('shutterBtn');
+        const barcodeImg = document.getElementById('barcode-img');
+        const errorMsg = document.getElementById('error-msg');
+
+        // 1. 啟動相機功能
+        async function startCamera() {
+            try {
+                // 請求使用後鏡頭 (environment)
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: { exact: "environment" } },
+                    audio: false 
+                }).catch(e => {
+                    // 如果沒有後鏡頭(像電腦)，就隨便抓一個鏡頭
+                    return navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                });
+                
+                video.srcObject = stream;
+            } catch (err) {
+                console.error("相機啟動失敗:", err);
+                errorMsg.style.display = 'block';
+                errorMsg.innerText = "無法啟動相機，請檢查權限或使用 Safari/Chrome 開啟";
+            }
+        }
+
+        // 頁面載入後立即啟動
+        window.addEventListener('load', startCamera);
+
+        // 2. 拍照合成邏輯 (最強大的 Canvas 合成術)
+        shutterBtn.addEventListener('click', () => {
+            // 暫時隱藏按鈕
+            shutterBtn.style.opacity = '0';
+
+            setTimeout(() => {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+
+                // 設定畫布大小等於影片原始解析度 (確保高畫質)
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+
+                // A. 繪製相機背景
+                // 為了處理 object-fit: cover 的裁切問題，我們需要計算比例
+                const videoAspect = video.videoWidth / video.videoHeight;
+                const screenAspect = window.innerWidth / window.innerHeight;
+                
+                // 這邊簡單處理：直接把影片拉伸填滿畫布 (最穩定)
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                // B. 繪製 Barcode 圖片
+                // 我們需要計算圖片在螢幕上的相對位置，換算回畫布上的位置
+                
+                // 1. 圖片在螢幕上的顯示寬度
+                const renderImg = barcodeImg.getBoundingClientRect();
+                const videoRect = video.getBoundingClientRect();
+
+                // 2. 計算縮放比例 (畫布尺寸 / 螢幕尺寸)
+                // 因為 object-fit: cover，這裡用一種近似算法確保圖片位置大致正確
+                // 在手機直式拍攝下，通常以寬度為基準
+                const scaleFactor = canvas.width / window.innerWidth;
+
+                // 3. 計算圖片在畫布上的大小與位置
+                const drawWidth = renderImg.width * scaleFactor;
+                const drawHeight = renderImg.height * scaleFactor;
+                
+                // 置中計算：(畫布寬 - 圖片寬) / 2
+                const drawX = (canvas.width - drawWidth) / 2;
+                // 垂直置中：(畫布高 - 圖片高) / 2
+                const drawY = (canvas.height - drawHeight) / 2;
+
+                // 執行繪製圖片
+                ctx.drawImage(barcodeImg, drawX, drawY, drawWidth, drawHeight);
+
+                // C. 下載圖片
+                const link = document.createElement('a');
+                link.download = 'mrt-photo.jpg';
+                link.href = canvas.toDataURL('image/jpeg', 0.95);
+                link.click();
+
+                // 恢復按鈕
+                shutterBtn.style.opacity = '1';
+            }, 100);
+        });
+    </script>
+</body>
+</html>
